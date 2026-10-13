@@ -1,0 +1,23 @@
+# Общая маршрутизация для любого хоста — домена платформы и своих доменов магазинов:
+# /api/* — бэкенд, всё остальное — фронт (SPA сама решает, платформа это или витрина на своём домене).
+# API на том же origin, что и страница: своим доменам магазинов не нужен CORS бэкенда.
+(app) {
+	encode zstd gzip
+
+	handle /healthz {
+		respond "ok" 200
+	}
+
+	handle /api/* {
+		reverse_proxy {$BACKEND_UPSTREAM} {
+			# Бэкенд берёт IP клиента для лимитов из последнего элемента X-Forwarded-For —
+			# отдаём ему ровно один адрес, уже разобранный Caddy (client_ip учитывает trusted_proxies).
+			header_up X-Forwarded-For {client_ip}
+			header_up X-Real-IP {client_ip}
+		}
+	}
+
+	handle {
+		reverse_proxy {$FRONTEND_UPSTREAM}
+	}
+}

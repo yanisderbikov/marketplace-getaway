@@ -1,0 +1,27 @@
+# Режим tls: свой сервер, Caddy сам на 80/443 и сам выпускает сертификаты Let's Encrypt.
+# Домен платформы — обычный сертификат; домены магазинов — on-demand: сертификат выпускается
+# при первом заходе, но только если бэкенд подтвердит, что домен привязан к включённому магазину.
+{
+	admin off
+	email {$ACME_EMAIL}
+	on_demand_tls {
+		ask http://{$BACKEND_UPSTREAM}/api/public/domains/resolve
+	}
+}
+
+import /etc/caddy/snippets.caddy
+
+{$PLATFORM_DOMAIN} {
+	import app
+}
+
+https:// {
+	tls {
+		on_demand
+	}
+	import app
+}
+
+http:// {
+	redir https://{host}{uri} permanent
+}

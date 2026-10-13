@@ -1,0 +1,9 @@
+# Railway: сборка по Dockerfile, домены (платформы и магазинов) вешаются на этот сервис.
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+healthcheckPath = "/healthz"
+healthcheckTimeout = 60
+restartPolicyType = "ON_FAILURE"

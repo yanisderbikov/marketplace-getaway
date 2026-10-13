@@ -1,0 +1,19 @@
+# Режим proxied: TLS снаружи (Railway edge, балансировщик). Caddy слушает чистый HTTP на $PORT
+# и принимает любой Host — какие домены вообще доходят до сервиса, решает внешний прокси.
+{
+	admin off
+	auto_https off
+	servers {
+		# Цепочку X-Forwarded-For разбираем справа налево, пропуская доверенные (внутренние) адреса:
+		# первый недоверенный — настоящий клиент, подделанные им левые элементы игнорируются.
+		trusted_proxies static {$TRUSTED_PROXIES:private_ranges}
+		trusted_proxies_strict
+		client_ip_headers X-Forwarded-For
+	}
+}
+
+import /etc/caddy/snippets.caddy
+
+:{$PORT:8080} {
+	import app
+}
