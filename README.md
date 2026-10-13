@@ -24,7 +24,9 @@
 - **Свой домен магазина.** Мерчант указывает домен в «Настройках» кабинета (`PUT /api/merchant/shop/domain`).
   Фронт, открытый не на хосте из `VITE_PLATFORM_HOSTS`, спрашивает `GET /api/public/domains/resolve?domain=<host>`
   и открывает витрину этого магазина с корня (`/`, `/product/…`, `/cart`, …). Адрес `/shop/{slug}` на
-  платформе продолжает работать. `www.` домена ведёт в тот же магазин.
+  платформе продолжает работать. Тот же домен с/без `www.` ведёт в тот же магазин.
+- **DNS-записи мерчант получает сразу после сохранения домена.** Бэкенд подключает домен через
+  `DOMAIN_PROVISIONER` и возвращает записи, кабинет показывает их таблицей со статусом проверки.
 - **IP клиента.** Бэкенд считает лимиты по последнему элементу `X-Forwarded-For`. Гейтвей перезаписывает
   этот заголовок одним адресом клиента (`{client_ip}`); в режиме `proxied` Caddy сам разбирает цепочку
   прокси Railway справа налево и пропускает доверенные внутренние адреса (`TRUSTED_PROXIES`).
@@ -33,8 +35,8 @@
 
 | `GATEWAY_MODE` | Где | TLS | Домены магазинов |
 |---|---|---|---|
-| `proxied` | Railway (или за любым балансировщиком) | снаружи, Caddy слушает HTTP на `$PORT` | каждый домен добавляется к сервису гейтвея в Railway (он и выпускает сертификат) |
-| `tls` | свой сервер | Caddy сам на 80/443, Let's Encrypt | **on-demand TLS**: сертификат выпускается при первом заходе, если бэкенд ответил 200 на `resolve` — ничего добавлять руками не нужно |
+| `proxied` | Railway (или за любым балансировщиком) | снаружи, Caddy слушает HTTP на `$PORT` | бэкенд (`DOMAIN_PROVISIONER=railway`) сам регистрирует домен на сервисе гейтвея через Railway API и отдаёт мерчанту CNAME + TXT от Railway; сертификат выпускает Railway |
+| `tls` | свой сервер | Caddy сам на 80/443, Let's Encrypt | бэкенд (`DOMAIN_PROVISIONER=static`) отдаёт CNAME на `DOMAIN_CNAME_TARGET` (A на `DOMAIN_A_RECORD_IP` для корня); **on-demand TLS**: сертификат выпускается при первом заходе, если бэкенд ответил 200 на `resolve` |
 
 ## Переменные окружения
 
@@ -66,10 +68,11 @@
 Переменные `gateway`: `GATEWAY_MODE=proxied`, `BACKEND_UPSTREAM=back.railway.internal:8090`,
 `FRONTEND_UPSTREAM=front.railway.internal:80`.
 
-**Подключить домен магазина на Railway:** мерчант сохраняет домен в кабинете, затем домен добавляется
-к сервису `gateway` (Settings → Networking → Custom Domain, или `railway domain <домен> --service gateway`).
-Railway покажет CNAME (и TXT для проверки) — их мерчант прописывает у своего регистратора.
-На своём сервере этот ручной шаг не нужен (on-demand TLS).
+**Домены магазинов на Railway подключаются сами:** у `back` заданы `DOMAIN_PROVISIONER=railway`,
+`RAILWAY_API_TOKEN` (токен проекта: Project Settings → Tokens), `RAILWAY_API_TOKEN_KIND=project`,
+`RAILWAY_GATEWAY_SERVICE_ID=${{gateway.RAILWAY_SERVICE_ID}}`, `RAILWAY_GATEWAY_PORT=8080`. Мерчант сохраняет
+домен — бэкенд создаёт custom domain на сервисе `gateway` и показывает мерчанту CNAME и TXT от Railway;
+отвязал — домен удаляется.
 
 ## Свой сервер (прод)
 
@@ -108,8 +111,8 @@ docker run -d --name marketplace-gateway --network marketplace --restart unless-
 `PAYMENT_ALLOWED_RETURN_HOSTS=market.ru` (домены магазинов бэкенд разрешает сам).
 
 **DNS для мерчантов на своём сервере:** заведите, например, `shops.market.ru` (A-запись на IP сервера) и
-соберите фронт с `VITE_CUSTOM_DOMAIN_TARGET=shops.market.ru` — кабинет подскажет мерчанту сделать CNAME
-своего домена на него (корневой домен — A-запись на тот же IP).
+задайте бэкенду `DOMAIN_PROVISIONER=static`, `DOMAIN_CNAME_TARGET=shops.market.ru`, `DOMAIN_A_RECORD_IP=<IP>` —
+кабинет покажет мерчанту CNAME своего домена на него (корневой домен — A-запись на IP) и проверит DNS.
 
 **Переезд с Railway:** `pg_dump` базы Railway → `pg_restore` в `marketplace-db`; секреты бэкенда
 (`PAYMENT_SECRETS_KEY` обязательно тот же — им зашифрованы ключи платёжек и СДЭК, `JWT_SECRET` — чтобы не
