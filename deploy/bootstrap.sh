@@ -8,8 +8,18 @@ PLATFORM_DOMAIN="${PLATFORM_DOMAIN:-yanderbikov.ru}"
 ACME_EMAIL="${ACME_EMAIL:-admin@${PLATFORM_DOMAIN}}"
 SERVER_IP="${SERVER_IP:-$(curl -4 -s https://ifconfig.me || true)}"
 
+# ── Swap: JVM бэкенда + PostgreSQL на 1 ГБ RAM без swap упираются в OOM ──
+if [ ! -f /swapfile ]; then
+  fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile >/dev/null && swapon /swapfile
+  echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  sysctl -w vm.swappiness=10 >/dev/null; echo 'vm.swappiness=10' > /etc/sysctl.d/90-swap.conf
+fi
+
 if ! command -v docker >/dev/null; then
-  curl -fsSL https://get.docker.com | sh
+  if ! curl -fsSL https://get.docker.com | sh; then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -q && apt-get install -y -q docker.io
+  fi
 fi
 systemctl enable --now docker
 
