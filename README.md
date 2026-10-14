@@ -76,39 +76,33 @@
 
 ## Свой сервер (прод)
 
-Все контейнеры — в одной docker-сети, наружу открыт только гейтвей (80/443). Образы собираются из
-своих репозиториев (`docker build`) или берутся из реестра.
+Прод живёт на своём сервере и деплоится **только из `main` через GitHub Actions**: git и исходников на
+сервере нет. В каждом репозитории (`marketplace-front`, `marketplace-back`, `marketplace-getaway`)
+`.github/workflows/deploy.yml` на push в `main` собирает образ, кладёт его в GHCR
+(`ghcr.io/<owner>/<repo>:<sha>` и `:latest`) и по SSH запускает `deploy/remote.sh` на сервере:
+`docker login ghcr.io` временным `GITHUB_TOKEN` → `docker pull` → замена контейнера → ожидание healthcheck
+(`/`, `/api/actuator/health`, `/healthz`). Контейнеры: `marketplace-db`, `marketplace-back`, `marketplace-front`,
+`marketplace-gateway` — все в docker-сети `marketplace`, наружу открыт только гейтвей (80/443).
+
+Секреты каждого репозитория: `DEPLOY_HOST` (IP сервера), `DEPLOY_SSH_KEY` (приватный ключ `root`).
+Переменные репозитория `marketplace-front` — `VITE_PLATFORM_HOSTS`, `VITE_PLATFORM_OPERATOR_*`,
+`VITE_PLATFORM_CONTACT_EMAIL` (вшиваются в бандл при сборке; `VITE_API_URL` пустой — API на том же origin).
+
+Конфигурация на сервере — env-файлы в `/etc/marketplace` (`remote.sh` подставляет `<сервис>.env`, если он есть):
+`db.env` (PostgreSQL), `back.env` (все переменные бэкенда, см. `marketplace-back/.env.example`),
+`gateway.env` (`GATEWAY_MODE=tls`, `PLATFORM_DOMAIN`, `ACME_EMAIL`, `BACKEND_UPSTREAM=marketplace-back:8090`,
+`FRONTEND_UPSTREAM=marketplace-front:80`). Сертификаты Let's Encrypt — в томе `marketplace-caddy`.
+
+Разовая подготовка сервера (Docker, сеть, PostgreSQL в томе, заготовки env-файлов, ufw):
 
 ```bash
-docker network create marketplace
-
-# PostgreSQL (данные — в томе)
-docker run -d --name marketplace-db --network marketplace --restart unless-stopped \
-  -e POSTGRES_DB=marketplace -e POSTGRES_USER=marketplace -e POSTGRES_PASSWORD=… \
-  -v marketplace-db:/var/lib/postgresql/data postgres:16-alpine
-
-# Бэкенд: переменные — см. marketplace-back/.env.example
-docker run -d --name marketplace-back --network marketplace --restart unless-stopped \
-  --env-file /etc/marketplace/back.env marketplace-back
-
-# Фронт: VITE_* вшиты при сборке (VITE_API_URL пустой, VITE_PLATFORM_HOSTS=market.ru,www.market.ru)
-docker run -d --name marketplace-front --network marketplace --restart unless-stopped marketplace-front
-
-# Гейтвей: сертификаты Let's Encrypt — в томе /data, без него они перевыпускались бы при каждом рестарте
-docker run -d --name marketplace-gateway --network marketplace --restart unless-stopped \
-  -p 80:80 -p 443:443 -p 443:443/udp \
-  -e GATEWAY_MODE=tls \
-  -e PLATFORM_DOMAIN="market.ru, www.market.ru" \
-  -e ACME_EMAIL=admin@market.ru \
-  -e BACKEND_UPSTREAM=marketplace-back:8090 \
-  -e FRONTEND_UPSTREAM=marketplace-front:80 \
-  -v marketplace-caddy:/data marketplace-gateway
+PLATFORM_DOMAIN=market.ru ssh root@<ip> 'bash -s' < deploy/bootstrap.sh
 ```
 
-Ключевые переменные бэкенда для сервера: `POSTGRES_URL=jdbc:postgresql://marketplace-db:5432/marketplace`,
-`FRONT_URL=https://market.ru`, `ALLOWED_ORIGINS=https://market.ru`,
-`PAYMENT_TINKOFF_NOTIFICATION_URL=https://market.ru/api/public/payment/tinkoff-webhook`,
-`PAYMENT_ALLOWED_RETURN_HOSTS=market.ru` (домены магазинов бэкенд разрешает сам).
+После этого заполнить пустые значения в `/etc/marketplace/back.env` (S3, NotiSend, `ADMIN_SUPER_EMAILS`;
+`JWT_SECRET`, `AUTH_LOGIN_CODE_SECRET`, `PAYMENT_SECRETS_KEY` скрипт генерирует сам) и запустить воркфлоу
+трёх репозиториев (push в `main` или «Run workflow»). DNS домена платформы (и `www.`) — A-запись на IP сервера;
+без неё гейтвей стартует, но сертификат не выпустит.
 
 **DNS для мерчантов на своём сервере:** заведите, например, `shops.market.ru` (A-запись на IP сервера) и
 задайте бэкенду `DOMAIN_PROVISIONER=static`, `DOMAIN_CNAME_TARGET=shops.market.ru`, `DOMAIN_A_RECORD_IP=<IP>` —
