@@ -32,7 +32,20 @@ if ! command -v docker >/dev/null; then
 fi
 systemctl enable --now docker
 
-docker network inspect marketplace >/dev/null 2>&1 || docker network create marketplace
+# ── Docker-сеть с MTU внешнего интерфейса: у многих VPS он 1450, а docker по умолчанию ставит 1500,
+# из-за чего TLS-рукопожатия с частью хостов (NotiSend, ZeroSSL) из контейнеров зависают.
+HOST_MTU=$(ip -o link show "$(ip route show default | awk '{print $5; exit}')" | awk '{print $5}')
+HOST_MTU=${HOST_MTU:-1500}
+printf '{"mtu": %s}\n' "$HOST_MTU" > /etc/docker/daemon.json
+NET_MTU=$(docker network inspect marketplace -f '{{index .Options "com.docker.network.driver.mtu"}}' 2>/dev/null || echo missing)
+if [ "$NET_MTU" != "$HOST_MTU" ]; then
+  attached=$(docker network inspect marketplace -f '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null || true)
+  for c in $attached; do docker network disconnect marketplace "$c"; done
+  [ "$NET_MTU" != missing ] && docker network rm marketplace >/dev/null
+  docker network create --opt com.docker.network.driver.mtu="$HOST_MTU" marketplace >/dev/null
+  for c in $attached; do docker network connect marketplace "$c"; done
+  echo "сеть marketplace пересоздана с MTU $HOST_MTU${attached:+, переподключены: $attached}"
+fi
 
 install -d -m 700 /etc/marketplace
 
