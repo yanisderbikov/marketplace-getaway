@@ -76,33 +76,34 @@
 
 ## Свой сервер (прод)
 
-Прод живёт на своём сервере и деплоится **только из `main` через GitHub Actions**: git и исходников на
-сервере нет. В каждом репозитории (`marketplace-front`, `marketplace-back`, `marketplace-getaway`)
-`.github/workflows/deploy.yml` на push в `main` собирает образ, кладёт его в GHCR
-(`ghcr.io/<owner>/<repo>:<sha>` и `:latest`) и по SSH запускает `deploy/remote.sh` на сервере:
-`docker login ghcr.io` временным `GITHUB_TOKEN` → `docker pull` → замена контейнера → ожидание healthcheck
-(`/`, `/api/actuator/health`, `/healthz`). Контейнеры: `marketplace-db`, `marketplace-back`, `marketplace-front`,
-`marketplace-gateway` — все в docker-сети `marketplace`, наружу открыт только гейтвей (80/443).
+Прод живёт на своём сервере и деплоится **только из `main`**: git и исходников на сервере нет, доступа
+к серверу у GitHub нет. В каждом репозитории (`marketplace-front`, `marketplace-back`, `marketplace-getaway`)
+`.github/workflows/deploy.yml` на push в `main` собирает образ и кладёт его в GHCR
+(`ghcr.io/<owner>/<repo>:<sha>` и `:latest`; пакеты публичные, токен для pull не нужен). На сервере
+systemd-таймер `marketplace-deploy` (`deploy/watcher.sh`) раз в минуту тянет `:latest` каждого сервиса и, если
+образ изменился или контейнер пропал, перекатывает его и ждёт healthcheck (`/api/actuator/health`, `/`,
+`/healthz`). Контейнеры: `marketplace-db`, `marketplace-back`, `marketplace-front`, `marketplace-gateway` — все
+в docker-сети `marketplace`, наружу открыт только гейтвей (80/443). Переменные репозитория `marketplace-front`
+(`VITE_PLATFORM_HOSTS`, `VITE_PLATFORM_OPERATOR_*`, `VITE_PLATFORM_CONTACT_EMAIL`) вшиваются в бандл при сборке;
+`VITE_API_URL` пустой — API на том же origin.
 
-Секреты каждого репозитория: `DEPLOY_HOST` (IP сервера), `DEPLOY_SSH_KEY` (приватный ключ `root`).
-Переменные репозитория `marketplace-front` — `VITE_PLATFORM_HOSTS`, `VITE_PLATFORM_OPERATOR_*`,
-`VITE_PLATFORM_CONTACT_EMAIL` (вшиваются в бандл при сборке; `VITE_API_URL` пустой — API на том же origin).
-
-Конфигурация на сервере — env-файлы в `/etc/marketplace` (`remote.sh` подставляет `<сервис>.env`, если он есть):
+Конфигурация на сервере — env-файлы в `/etc/marketplace` (вотчер подставляет `<сервис>.env`, если он есть):
 `db.env` (PostgreSQL), `back.env` (все переменные бэкенда, см. `marketplace-back/.env.example`),
 `gateway.env` (`GATEWAY_MODE=tls`, `PLATFORM_DOMAIN`, `ACME_EMAIL`, `BACKEND_UPSTREAM=marketplace-back:8090`,
 `FRONTEND_UPSTREAM=marketplace-front:80`). Сертификаты Let's Encrypt — в томе `marketplace-caddy`.
 
-Разовая подготовка сервера (Docker, сеть, PostgreSQL в томе, заготовки env-файлов, ufw):
+Разовая подготовка сервера (swap, Docker, сеть, PostgreSQL в томе, заготовки env-файлов, ufw, таймер):
 
 ```bash
+scp deploy/watcher.sh root@<ip>:/usr/local/bin/marketplace-deploy
 PLATFORM_DOMAIN=market.ru ssh root@<ip> 'bash -s' < deploy/bootstrap.sh
 ```
 
 После этого заполнить пустые значения в `/etc/marketplace/back.env` (S3, NotiSend, `ADMIN_SUPER_EMAILS`;
-`JWT_SECRET`, `AUTH_LOGIN_CODE_SECRET`, `PAYMENT_SECRETS_KEY` скрипт генерирует сам) и запустить воркфлоу
-трёх репозиториев (push в `main` или «Run workflow»). DNS домена платформы (и `www.`) — A-запись на IP сервера;
-без неё гейтвей стартует, но сертификат не выпустит.
+`JWT_SECRET`, `AUTH_LOGIN_CODE_SECRET`, `PAYMENT_SECRETS_KEY` скрипт генерирует сам). DNS домена платформы
+(и `www.`) — A-запись на IP сервера; без неё гейтвей стартует, но сертификат не выпустит.
+Руками: `marketplace-deploy` (проверить и накатить), `marketplace-deploy --force back` (перезапустить сервис,
+например после правки `back.env`), `journalctl -u marketplace-deploy` (лог деплоев).
 
 **DNS для мерчантов на своём сервере:** заведите, например, `shops.market.ru` (A-запись на IP сервера) и
 задайте бэкенду `DOMAIN_PROVISIONER=static`, `DOMAIN_CNAME_TARGET=shops.market.ru`, `DOMAIN_A_RECORD_IP=<IP>` —

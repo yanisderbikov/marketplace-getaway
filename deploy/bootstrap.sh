@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# Разовая подготовка своего сервера (Ubuntu/Debian) под marketplace. Запуск: ssh root@сервер 'bash -s' < deploy/bootstrap.sh
-# Ставит Docker, создаёт сеть marketplace, PostgreSQL в томе и заготовки env-файлов в /etc/marketplace.
-# Git и исходники на сервере не нужны: сами сервисы приезжают образами из GHCR через GitHub Actions.
+# Разовая подготовка своего сервера (Ubuntu/Debian) под marketplace:
+#   scp deploy/watcher.sh root@<ip>:/usr/local/bin/marketplace-deploy
+#   PLATFORM_DOMAIN=market.ru ssh root@<ip> 'bash -s' < deploy/bootstrap.sh
+# Ставит Docker, создаёт сеть marketplace, PostgreSQL в томе, заготовки env-файлов в /etc/marketplace
+# и systemd-таймер marketplace-deploy (раз в минуту тянет новые образы из GHCR, см. watcher.sh).
+# Git и исходники на сервере не нужны: сервисы приезжают образами, которые собирает GitHub Actions из main.
 set -euo pipefail
 
 PLATFORM_DOMAIN="${PLATFORM_DOMAIN:-yanderbikov.ru}"
@@ -97,5 +100,36 @@ if command -v ufw >/dev/null; then
   ufw --force enable >/dev/null
 fi
 
-echo "ok: docker $(docker --version | cut -d' ' -f3), сеть marketplace, marketplace-db, /etc/marketplace/{db,back,gateway}.env"
-echo "дальше: заполнить пустые переменные в /etc/marketplace/back.env и запустить деплой из GitHub Actions"
+# ── Вотчер деплоя: systemd-таймер раз в минуту ──
+if [ -f /usr/local/bin/marketplace-deploy ]; then
+  chmod 755 /usr/local/bin/marketplace-deploy
+  cat > /etc/systemd/system/marketplace-deploy.service <<EOT
+[Unit]
+Description=marketplace: pull new images from GHCR and roll containers
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/marketplace-deploy
+EOT
+  cat > /etc/systemd/system/marketplace-deploy.timer <<EOT
+[Unit]
+Description=marketplace deploy watcher (every minute)
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=60s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target
+EOT
+  systemctl daemon-reload
+  systemctl enable --now marketplace-deploy.timer
+else
+  echo "ВНИМАНИЕ: /usr/local/bin/marketplace-deploy не найден — сначала scp deploy/watcher.sh" >&2
+fi
+
+echo "ok: docker $(docker --version | cut -d' ' -f3), сеть marketplace, marketplace-db, /etc/marketplace/{db,back,gateway}.env, таймер marketplace-deploy"
+echo "дальше: заполнить пустые переменные в /etc/marketplace/back.env; логи деплоя — journalctl -u marketplace-deploy"
