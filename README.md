@@ -96,12 +96,12 @@ systemd-таймер `marketplace-deploy` (`deploy/watcher.sh`) раз в мин
 
 ```bash
 scp deploy/watcher.sh root@<ip>:/usr/local/bin/marketplace-deploy
-PLATFORM_DOMAIN=market.ru ssh root@<ip> 'bash -s' < deploy/bootstrap.sh
+PLATFORM_DOMAIN=marketplace.market.ru ssh root@<ip> 'bash -s' < deploy/bootstrap.sh
 ```
 
 После этого заполнить пустые значения в `/etc/marketplace/back.env` (S3, NotiSend, `ADMIN_SUPER_EMAILS`;
 `JWT_SECRET`, `AUTH_LOGIN_CODE_SECRET`, `PAYMENT_SECRETS_KEY` скрипт генерирует сам). DNS домена платформы
-(и `www.`) — A-запись на IP сервера; без неё гейтвей стартует, но сертификат не выпустит.
+(для корневого домена и `www.`) — A-запись на IP сервера; без неё гейтвей стартует, но сертификат не выпустит.
 Руками: `marketplace-deploy` (проверить и накатить), `marketplace-deploy --force back` (перезапустить сервис,
 например после правки `back.env`), `journalctl -u marketplace-deploy` (лог деплоев).
 

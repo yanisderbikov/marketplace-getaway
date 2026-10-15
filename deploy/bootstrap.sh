@@ -1,14 +1,20 @@
 #!/usr/bin/env bash
 # Разовая подготовка своего сервера (Ubuntu/Debian) под marketplace:
 #   scp deploy/watcher.sh root@<ip>:/usr/local/bin/marketplace-deploy
-#   PLATFORM_DOMAIN=market.ru ssh root@<ip> 'bash -s' < deploy/bootstrap.sh
+#   PLATFORM_DOMAIN=marketplace.market.ru ssh root@<ip> 'bash -s' < deploy/bootstrap.sh
 # Ставит Docker, создаёт сеть marketplace, PostgreSQL в томе, заготовки env-файлов в /etc/marketplace
 # и systemd-таймер marketplace-deploy (раз в минуту тянет новые образы из GHCR, см. watcher.sh).
 # Git и исходники на сервере не нужны: сервисы приезжают образами, которые собирает GitHub Actions из main.
 set -euo pipefail
 
-PLATFORM_DOMAIN="${PLATFORM_DOMAIN:-yanderbikov.ru}"
-ACME_EMAIL="${ACME_EMAIL:-admin@${PLATFORM_DOMAIN}}"
+PLATFORM_DOMAIN="${PLATFORM_DOMAIN:-marketplace.yanderbikov.ru}"
+ACME_EMAIL="${ACME_EMAIL:-admin@${PLATFORM_DOMAIN#*.}}"
+# Корневой домен (market.ru) обслуживаем и с www.; поддомен (marketplace.market.ru) — только сам.
+case "$PLATFORM_DOMAIN" in
+  *.*.*) PLATFORM_HOSTS="$PLATFORM_DOMAIN"; CADDY_HOSTS="$PLATFORM_DOMAIN" ;;
+  *)     PLATFORM_HOSTS="${PLATFORM_DOMAIN},www.${PLATFORM_DOMAIN}"; CADDY_HOSTS="${PLATFORM_DOMAIN}, www.${PLATFORM_DOMAIN}" ;;
+esac
+ROOT_DOMAIN="${PLATFORM_DOMAIN#*.}"; case "$PLATFORM_DOMAIN" in *.*.*) ;; *) ROOT_DOMAIN="$PLATFORM_DOMAIN" ;; esac
 SERVER_IP="${SERVER_IP:-$(curl -4 -s https://ifconfig.me || true)}"
 
 # ── Swap: JVM бэкенда + PostgreSQL на 1 ГБ RAM без swap упираются в OOM ──
@@ -51,7 +57,7 @@ if [ ! -f /etc/marketplace/back.env ]; then
   # shellcheck disable=SC1091
   . /etc/marketplace/db.env
   cat > /etc/marketplace/back.env <<EOT
-ALLOWED_ORIGINS=https://${PLATFORM_DOMAIN},https://www.${PLATFORM_DOMAIN}
+ALLOWED_ORIGINS=https://${PLATFORM_DOMAIN}
 FRONT_URL=https://${PLATFORM_DOMAIN}
 POSTGRES_URL=jdbc:postgresql://marketplace-db:5432/${POSTGRES_DB}
 POSTGRES_USER=${POSTGRES_USER}
@@ -67,16 +73,16 @@ JWT_EXPIRATION_SECONDS=2592000
 ADMIN_SUPER_EMAILS=
 AUTH_LOGIN_CODE_SECRET=$(openssl rand -base64 32 | tr -d '\n')
 EMAIL_NOTISEND_API_KEY=
-EMAIL_NOTISEND_EMAIL_ADDRESS=noreply@${PLATFORM_DOMAIN}
+EMAIL_NOTISEND_EMAIL_ADDRESS=noreply@${ROOT_DOMAIN}
 EMAIL_NOTISEND_FROM_NAME=marketplace
 SDEK_TARIFF_CODE=136
 PAYMENT_TINKOFF_API_URL=https://securepay.tinkoff.ru/v2
 PAYMENT_TINKOFF_NOTIFICATION_URL=https://${PLATFORM_DOMAIN}/api/public/payment/tinkoff-webhook
 PAYMENT_SECRETS_KEY=$(openssl rand -base64 32 | tr -d '\n')
-PAYMENT_ALLOWED_RETURN_HOSTS=${PLATFORM_DOMAIN},www.${PLATFORM_DOMAIN}
+PAYMENT_ALLOWED_RETURN_HOSTS=${PLATFORM_HOSTS}
 PAYMENT_PENDING_CHECK_INTERVAL_MS=60000
 DOMAIN_PROVISIONER=static
-DOMAIN_CNAME_TARGET=shops.${PLATFORM_DOMAIN}
+DOMAIN_CNAME_TARGET=shops.${ROOT_DOMAIN}
 DOMAIN_A_RECORD_IP=${SERVER_IP}
 EOT
   chmod 600 /etc/marketplace/back.env
@@ -86,7 +92,7 @@ fi
 if [ ! -f /etc/marketplace/gateway.env ]; then
   cat > /etc/marketplace/gateway.env <<EOT
 GATEWAY_MODE=tls
-PLATFORM_DOMAIN=${PLATFORM_DOMAIN}, www.${PLATFORM_DOMAIN}
+PLATFORM_DOMAIN=${CADDY_HOSTS}
 ACME_EMAIL=${ACME_EMAIL}
 BACKEND_UPSTREAM=marketplace-back:8090
 FRONTEND_UPSTREAM=marketplace-front:80
